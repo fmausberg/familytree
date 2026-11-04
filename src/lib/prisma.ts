@@ -9,8 +9,11 @@ const globalForPrisma = globalThis as unknown as {
     prisma?: PrismaClient;
 };
 
+// Hot reload can retain a client created before a schema change. Such a client
+// has no delegate for newly generated models and must not be reused.
+const cachedClient = globalForPrisma.prisma;
 export const prisma =
-    globalForPrisma.prisma ?? new PrismaClient({ adapter });
+    cachedClient?.authAttempt && cachedClient?.person && cachedClient?.familyTreeMembership ? cachedClient : new PrismaClient({ adapter });
 
 if (process.env.NODE_ENV !== "production") {
     globalForPrisma.prisma = prisma;

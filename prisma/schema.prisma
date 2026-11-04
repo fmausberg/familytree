@@ -12,9 +12,12 @@ model User {
   email         String?   @unique
   emailVerified DateTime?
   image         String?
+  passwordHash  String?
 
   accounts      Account[]
   sessions      Session[]
+  familyTreeMemberships FamilyTreeMembership[]
+  ownedFamilyTrees      FamilyTree[] @relation("FamilyTreeOwner")
 
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
@@ -58,3 +61,199 @@ model VerificationToken {
 
   @@id([identifier, token])
 }
+
+model AuthAttempt {
+  key       String @id
+  count     Int @default(1)
+  expiresAt DateTime
+  @@index([expiresAt])
+}
+
+enum FamilyTreeRole {
+  OWNER
+  ADMIN
+  MEMBER
+}
+
+model FamilyTree {
+  id        String   @id @default(cuid())
+  name      String
+  // A required owner identifies exactly one owner. The application keeps the
+  // matching OWNER membership in sync in a serializable transaction.
+  ownerId   String
+  owner     User     @relation("FamilyTreeOwner", fields: [ownerId], references: [id], onDelete: Restrict)
+  memberships FamilyTreeMembership[]
+  persons     Person[]
+  events      Event[]
+  participants EventParticipant[]
+  parentChildLinks ParentChild[]
+  unions      Union[]
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([ownerId])
+}
+
+model FamilyTreeMembership {
+  familyTreeId String
+  userId       String
+  role         FamilyTreeRole @default(MEMBER)
+  familyTree   FamilyTree @relation(fields: [familyTreeId], references: [id], onDelete: Cascade)
+  user         User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  @@id([familyTreeId, userId])
+  @@index([userId, createdAt])
+}
+
+// Stammbaum-Kerndaten
+model Person {
+  id          String   @id @default(cuid())
+  familyTreeId String
+  familyTree   FamilyTree @relation(fields: [familyTreeId], references: [id], onDelete: Cascade)
+  givenNames  String?
+  surname     String?
+  birthName   String?
+  gender      Gender?
+
+  events      EventParticipant[] @relation("PersonEvents")
+  parentLinks ParentChild[]       @relation("Child")
+  childLinks  ParentChild[]       @relation("Parent")
+  unionsA     Union[]             @relation("UnionPersonA")
+  unionsB     Union[]             @relation("UnionPersonB")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([familyTreeId, id])
+}
+
+enum Gender {
+  FEMALE
+  MALE
+  DIVERSE
+  UNKNOWN
+}
+
+model Event {
+  id          String    @id @default(cuid())
+  familyTreeId String
+  familyTree   FamilyTree @relation(fields: [familyTreeId], references: [id], onDelete: Cascade)
+  type        EventType
+  date        Json?
+  place       String?
+  description String?   @db.Text
+
+  participants EventParticipant[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([familyTreeId, id])
+}
+
+model EventParticipant {
+  familyTreeId String
+  familyTree   FamilyTree @relation(fields: [familyTreeId], references: [id], onDelete: Cascade)
+  eventId  String
+  personId String
+  role     EventRole @default(PRINCIPAL)
+
+  event  Event  @relation(fields: [familyTreeId, eventId], references: [familyTreeId, id], onDelete: Cascade, onUpdate: NoAction)
+  person Person @relation("PersonEvents", fields: [familyTreeId, personId], references: [familyTreeId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  @@id([eventId, personId, role])
+  @@index([familyTreeId, personId])
+  @@index([familyTreeId, eventId])
+}
+
+enum EventType {
+  BIRTH
+  DEATH
+  MARRIAGE
+  DIVORCE
+  ADOPTION
+  OTHER
+}
+
+enum EventRole {
+  PRINCIPAL
+  PARTNER
+  ADOPTIVE_PARENT
+  WITNESS
+  OTHER
+}
+
+// Elternschaft: explizit gespeichert, Stiefelternschaft nicht.
+// parent -> child; kind beschreibt die Art dieser Elternbeziehung.
+model ParentChild {
+  id       String            @id @default(cuid())
+  familyTreeId String
+  familyTree   FamilyTree @relation(fields: [familyTreeId], references: [id], onDelete: Cascade)
+  parentId String
+  childId  String
+  kind     ParentChildKind
+  startDate Json?
+  endDate   Json?
+  notes     String?           @db.Text
+
+  parent Person @relation("Parent", fields: [familyTreeId, parentId], references: [familyTreeId, id], onDelete: Cascade, onUpdate: NoAction)
+  child  Person @relation("Child", fields: [familyTreeId, childId], references: [familyTreeId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([familyTreeId, parentId, childId, kind])
+  @@index([familyTreeId, childId])
+}
+
+enum ParentChildKind {
+  BIOLOGICAL
+  ADOPTIVE
+  LEGAL
+  FOSTER
+  UNKNOWN
+}
+
+// Partnerschaft zwischen zwei Personen; Ereignisse wie Hochzeit und
+// Scheidung bleiben zusätzlich als Events mit den Beteiligten gespeichert.
+model Union {
+  id        String      @id @default(cuid())
+  familyTreeId String
+  familyTree   FamilyTree @relation(fields: [familyTreeId], references: [id], onDelete: Cascade)
+  personAId String
+  personBId String
+  type      UnionType
+  startDate Json?
+  endDate   Json?
+  endReason UnionEndReason?
+  notes     String?     @db.Text
+
+  personA Person @relation("UnionPersonA", fields: [familyTreeId, personAId], references: [familyTreeId, id], onDelete: Cascade, onUpdate: NoAction)
+  personB Person @relation("UnionPersonB", fields: [familyTreeId, personBId], references: [familyTreeId, id], onDelete: Cascade, onUpdate: NoAction)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([familyTreeId, personAId])
+  @@index([familyTreeId, personBId])
+}
+
+enum UnionType {
+  MARRIAGE
+  PARTNERSHIP
+  OTHER
+}
+
+enum UnionEndReason {
+  DIVORCE
+  ANNULMENT
+  DEATH
+  SEPARATION
+  OTHER
+}
+
+// Flexible Datumsangaben werden unter PostgreSQL als JSON gespeichert:
+// { year?, month?, day?, isApprox?, beforeYear?, afterYear? }.
+// Ein fehlendes isApprox entspricht false. Nur bekannte Werte ausfüllen.
