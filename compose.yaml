@@ -1,0 +1,76 @@
+services:
+  db:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      POSTGRES_DB: familytree
+      POSTGRES_USER: familytree
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}
+    volumes:
+      - familytree_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U familytree -d familytree"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+
+  app:
+    image: ghcr.io/fmausberg/familytree-app:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    env_file:
+      - .env.docker
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOSTNAME: 0.0.0.0
+      DATABASE_URL: postgresql://familytree:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}@db:5432/familytree
+      AUTH_URL: https://stammbaum.mausberg.net
+      AUTH_TRUST_HOST: "true"
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+      - web
+    labels:
+      traefik.enable: "true"
+      traefik.docker.network: "web"
+      traefik.http.routers.familytree.rule: "Host(`stammbaum.mausberg.net`)"
+      traefik.http.routers.familytree.entrypoints: "websecure"
+      traefik.http.routers.familytree.tls: "true"
+      traefik.http.routers.familytree.tls.certresolver: "myresolver"
+      traefik.http.routers.familytree.service: "familytree"
+      traefik.http.services.familytree.loadbalancer.server.port: "3000"
+      traefik.http.routers.familytree-http.rule: "Host(`stammbaum.mausberg.net`)"
+      traefik.http.routers.familytree-http.entrypoints: "web"
+      traefik.http.routers.familytree-http.middlewares: "familytree-https"
+      traefik.http.routers.familytree-http.service: "familytree"
+      traefik.http.middlewares.familytree-https.redirectscheme.scheme: "https"
+
+  migrate:
+    image: ghcr.io/fmausberg/familytree-migrate:${IMAGE_TAG:-latest}
+    env_file:
+      - .env.docker
+    environment:
+      DATABASE_URL: postgresql://familytree:${POSTGRES_PASSWORD:?Set POSTGRES_PASSWORD in .env.docker}@db:5432/familytree
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - default
+    profiles:
+      - tools
+
+volumes:
+  familytree_postgres_data:
+    name: familytree_postgres_data
+
+networks:
+  default:
+    name: familytree_default
+  web:
+    external: true
+    name: web
