@@ -10,9 +10,11 @@ RUN npm ci
 
 FROM dependencies AS build
 COPY . .
+# Prisma 7 config requires DATABASE_URL even for client generation/build.
+# This build-only URL is never used by the running container.
+ENV DATABASE_URL=postgresql://familytree:build-only@127.0.0.1:5432/familytree
 RUN npm run db:generate
 RUN npm run build
-ENV NODE_ENV=production
 
 FROM dependencies AS migrate
 COPY prisma ./prisma
